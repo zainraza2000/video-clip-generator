@@ -1,23 +1,52 @@
 // Types and interfaces for the application\
 
-import { Transcript } from 'assemblyai';
+import { Transcript, TranscriptUtterance } from 'assemblyai';
 
-export interface VideoProcessRequest {
-  videoUrl: string;
-  requestId?: string;
+export type InputVideo = {
+  url: string;
+  description?: string;
   speakersExpected?: number;
-}
+};
 
-export interface VideoProcessResponse {
-  status: 'success' | 'error';
-  message?: string;
-  data?: {
-    videoPath?: string;
-    audioPath?: string;
-    transcript?: Transcript;
-    screenshot?: string;
+export type VideoProcessMessage = {
+  videos: InputVideo[];
+  userPrompt?: string;
+};
+
+export type PipelineResponse<T> =
+| {
+    status: "success";
+    data: T;
+  }
+| {
+    status: "error";
+    message: string;
   };
-}
+
+export type DownloadVideoResponse = PipelineResponse<{
+  videoPaths: string[];
+}>;
+
+export type VideoToAudioResponse = PipelineResponse<{ audioPaths: string[] }>;
+
+export type AudioToTranscriptResponse = PipelineResponse<{
+  transcripts: Transcript[];
+}>;
+
+export type ExtractScreenshotResponse = PipelineResponse<{
+  screenshotPaths: string[][];
+}>;
+
+export type TranscriptInternal = {
+  utterances: TranscriptUtterance[];
+  start: number;
+  end: number;
+};
+
+export type PromptSegment = {
+  text: string;
+  images: string[];
+};
 
 export interface S3Config {
   region: string;
@@ -33,9 +62,6 @@ export interface TranscriptRequest {
   speaker_labels: boolean;
   speakers_expected?: number;
 }
-
-// Using the official AssemblyAI SDK types
-export type TranscriptResponse = Transcript;
 
 export interface Utterance {
   speaker: string;

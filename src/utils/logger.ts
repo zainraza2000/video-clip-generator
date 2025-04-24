@@ -1,9 +1,9 @@
-// Logging utility for the application
 import winston from 'winston';
+import { LOG_LEVEL } from '../config';
 
 // Configure logger
 export const logger = winston.createLogger({
-  level: process.env.LOG_LEVEL || 'info',
+  level: LOG_LEVEL || 'info',
   format: winston.format.combine(
     winston.format.timestamp(),
     winston.format.json()
@@ -17,13 +17,9 @@ export const logger = winston.createLogger({
         winston.format.simple()
       ),
     }),
-    // Optional: Write to file
-    // new winston.transports.File({ filename: 'logs/error.log', level: 'error' }),
-    // new winston.transports.File({ filename: 'logs/combined.log' }),
   ],
 });
 
-// Export a simplified logger interface
 export default {
   info: (message: string, meta?: object) => logger.info(message, meta),
   error: (message: string, meta?: object) => logger.error(message, meta),

@@ -1,70 +1,128 @@
 // Application entry point
-import {processVideoRequest } from './app';
-import { logger } from './utils/logger';
-
+import {
+  SCREENSHOTS_PER_SEGMENT,
+  TRANSCRIPTION_SEGMENT_INTERVAL,
+} from "./config";
+import { extractScreenshots } from "./pipeline/screenshot";
+import { getTranscriptsByInterval } from "./services/transcription";
+import {
+  AudioToTranscriptResponse,
+  DownloadVideoResponse,
+  ExtractScreenshotResponse,
+  VideoProcessMessage,
+  VideoToAudioResponse,
+} from "./types";
+import { logger } from "./utils/logger";
+import fs from "fs";
+import { getPrompSegments } from "./pipeline/prompt";
+import { downloadVideos } from "./pipeline/download";
+import { unwrapResponse } from "./utils/utils";
+import { videosToAudios } from "./pipeline/audio";
+import { audiosToTranscripts } from "./pipeline/transcript";
 
 async function main() {
   try {
+    // const messages = await retrieveMessages()
+    const messages = [
+      {
+        Body: JSON.stringify({
+          videos: [
+            {
+              url: "https://drive.usercontent.google.com/download?id=1RCyBoG1oMjE0HtDoz593Pp-kDhh2nOva&export=download&authuser=0&confirm=t&uuid=7df1150e-cc0e-43e6-9d94-124261ce4cf3&at=APcmpox_cwg8sovHu0wNO2LWjx1Q:1745509832769",
+            },
+          ],
+        }),
+      },
+    ];
+    // while (true) {
+    for (const message of messages) {
+      try {
+        if (message.Body) {
+          const messageBody: VideoProcessMessage = JSON.parse(message.Body);
 
-    const exampleurl = {
-      videoUrl: 'https://drive.usercontent.google.com/download?id=1NoPnFvfAd-0xUGBaytbvknYvtPT18b5K&export=download&authuser=0&confirm=t&uuid=f99187ad-41fc-41c2-bcce-01734629f3f3&at=APcmpoxZ6KRtQ8CJtoXhK3Kmgb70:1745331088612',
-    };
-    
+          // Step 1: Download videos
+          const dvRes: DownloadVideoResponse = await downloadVideos(
+            messageBody.videos
+          );
+          const dvData = unwrapResponse(dvRes);
+          if (!dvData) continue;
 
-    const result = await processVideoRequest(exampleurl);
-    logger.info('Processing completed', { 
-      status: result.status,
-      hasTranscript: result.data?.transcript ? 'yes' : 'no',
-      hasScreenshot: result.data?.screenshot ? 'yes' : 'no' 
-    });
+          // Step 2: Videos To Audio
+          const vaRes: VideoToAudioResponse = await videosToAudios(
+            dvData.videoPaths
+          );
+          const vaData = unwrapResponse(vaRes);
+          if (!vaData) continue;
 
-    if (result.data?.screenshot) {
-      logger.info('Screenshot saved at', {
-        screenshotPath: result.data.screenshot 
-      });
-    }
-    
+          // Step 3: Audios To Transcripts
+          const atRes: AudioToTranscriptResponse = await audiosToTranscripts(
+            vaData.audioPaths
+          );
+          const atData = unwrapResponse(atRes);
+          if (!atData) continue;
 
-    if (result.data?.transcript) {
-      const transcript = result.data.transcript;
-      
+          // Step 4: Transcripts To Segments
+          // transcriptSegments array contains an array of transcripts for each video, seperated by interval
+          const transcriptSegments = atData.transcripts.map((transcript) =>
+            getTranscriptsByInterval(transcript, TRANSCRIPTION_SEGMENT_INTERVAL)
+          );
 
-      // logger.info('Transcript text', { text: transcript.text });
-      
+          // Step 5: Screenshots Extraction From Videos
+          const esRes: ExtractScreenshotResponse = await extractScreenshots(
+            dvData.videoPaths.map((videoPath, index) => {
+              const transcript = atData.transcripts[index];
+              return {
+                path: videoPath,
+                duration: transcript.audio_duration! - 1,
+              };
+            }),
+            TRANSCRIPTION_SEGMENT_INTERVAL,
+            SCREENSHOTS_PER_SEGMENT
+          );
+          const esData = unwrapResponse(esRes);
+          if (!esData) continue;
 
-      // if (transcript.words && transcript.words.length > 0) {
-        
-      if (transcript.utterances && transcript.utterances.length > 0) {
-
-        // for (const word of transcript.words) {
-        //   console.log(
-        //     `Word: ${word.text}, Start: ${word.start}, End: ${word.end}, Confidence: ${word.speaker}`
-        //   );
-        // }
-        for (const utterance of transcript.utterances) {
-
-          const startTime = utterance.start;
-          const endTime = utterance.end;
-          console.log(`Speaker ${utterance.speaker} (${startTime} - ${endTime}): ${utterance.text}`);
-
-          // console.log(`Speaker ${utterance.speaker}: ${utterance.text}`)
+          for (let i = 0; i < messageBody.videos.length; i++) {
+            const videoTranscriptSegments = transcriptSegments[i];
+            const videoScreenshots = esData.screenshotPaths[i];
+            const totalSegments = videoTranscriptSegments.length;
+            // if(videoScreenshots.length !== totalSegments * SCREENSHOTS_PER_SEGMENT) {
+            //   logger.error("Unkown error");
+            //   continue
+            // }
+            const prompSegments = getPrompSegments(
+              videoTranscriptSegments,
+              videoScreenshots,
+              SCREENSHOTS_PER_SEGMENT
+            );
+            fs.writeFile(
+              "prompSegments.json",
+              JSON.stringify(prompSegments),
+              "utf8",
+              (err) => {}
+            );
+            console.log(JSON.stringify(prompSegments));
           }
-      } else {
-        logger.info('No word-level details available');
+
+          // if (message.ReceiptHandle) await deleteMessage(message.ReceiptHandle);
+        }
+      } catch (err) {
+        continue;
+      } finally {
+
       }
     }
-    
+    // }
   } catch (error: unknown) {
-    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-    logger.error('Application failed', { error: errorMessage });
+    const errorMessage =
+      error instanceof Error ? error.message : "Unknown error";
+    logger.error("Application failed", { error: errorMessage });
     process.exit(1);
   }
 }
 
-
 if (require.main === module) {
   main();
 }
-
 
 export { main };
