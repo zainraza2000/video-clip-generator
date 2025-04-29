@@ -17,6 +17,9 @@ export const AWS_ACCESS_KEY_ID = process.env.AWS_ACCESS_KEY_ID!;
 export const AWS_SECRET_ACCESS_KEY = process.env.AWS_SECRET_ACCESS_KEY!;
 export const AWS_SQS_QUEUE_URL = process.env.AWS_SQS_QUEUE_URL!
 
+// LLM
+export const OPENAI_API_KEY = process.env.OPENAI_API_KEY!;
+
 // Default audio format for extraction
 export const AUDIO_FORMAT = {
   codec: 'libmp3lame',

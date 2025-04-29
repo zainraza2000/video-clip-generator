@@ -1,7 +1,6 @@
 // Service to extract audio from video files
 import { spawn } from 'child_process';
 import path from 'path';
-import fs from 'fs';
 import { AUDIO_FORMAT } from '../config';
 import { logger } from '../utils/logger';
 

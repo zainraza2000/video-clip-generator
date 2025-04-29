@@ -1,8 +1,5 @@
 import { SQSClient, ReceiveMessageCommand, DeleteMessageCommand, ReceiveMessageRequest } from '@aws-sdk/client-sqs';
-import { config } from "dotenv";
 import { AWS_SQS_QUEUE_URL } from '../config';
-
-config()
 
 const sqs = new SQSClient({ region: 'your-region' });
 

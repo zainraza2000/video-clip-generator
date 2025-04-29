@@ -1,6 +1,6 @@
 import { DownloadVideoResponse, InputVideo } from "../types/index";
 import { logger } from "../utils/logger";
-import { downloadVideo } from "../services/VideoDownload";
+import { downloadVideo } from "../services/videoDownloadService";
 
 export async function downloadVideos(
   videos: InputVideo[]

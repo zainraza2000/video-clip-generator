@@ -2,6 +2,19 @@ import fs from "fs";
 import path from "path";
 import { logger } from "../utils/logger";
 import { TMP_DIR } from "../config";
+import { deleteFiles } from "../services/fileService";
+import { removeFiles } from "../services/s3Service";
+
+export async function cleanUp(localPaths: string[], urls: string[]) {
+  const fileKeys = urls.map((url) => {
+    const urlObj = new URL(url);
+    const key = urlObj.pathname.startsWith("/")
+      ? urlObj.pathname.slice(1) // remove leading '/'
+      : urlObj.pathname;
+    return key;
+  });
+  await Promise.all([deleteFiles(localPaths), removeFiles(fileKeys)]);
+}
 
 export function cleanUpTmpDir(): void {
   try {

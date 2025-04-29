@@ -1,11 +1,10 @@
 import {
-  DeleteObjectCommand,
   PutObjectCommand,
   S3Client,
   GetObjectCommand,
+  DeleteObjectsCommand,
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
-import { config } from "dotenv";
 import crypto from "crypto";
 import {
   AWS_ACCESS_KEY_ID,
@@ -13,8 +12,6 @@ import {
   AWS_REGION,
   AWS_SECRET_ACCESS_KEY,
 } from "../config";
-
-config();
 
 export const getRandomFileName = (bytes = 32) =>
   crypto.randomBytes(bytes).toString("hex");
@@ -46,13 +43,21 @@ export const uploadFile = async ({
   });
 
   const response = await s3Client.send(command);
-  return { response, filename };
-};
 
-export const removeFile = async (filename: string) => {
-  const command = new DeleteObjectCommand({
+  const getCommand = new GetObjectCommand({
     Bucket: AWS_BUCKET_NAME,
     Key: filename,
+  });
+
+  const signedUrl = await getSignedUrl(s3Client, getCommand, { expiresIn: 3600 });
+
+  return signedUrl;
+};
+
+export const removeFiles = async (keys: string[]) => {
+  const command = new DeleteObjectsCommand({
+    Bucket: AWS_BUCKET_NAME,
+    Delete: { Objects: keys.map((Key) => ({ Key })) },
   });
   await s3Client.send(command);
 };

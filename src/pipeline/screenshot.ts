@@ -66,7 +66,8 @@ export async function extractScreenshots(
           for (let j = 0; j < intervalMs; j += delta) {
             const start = i + j;
             const end = i + j + delta > durationMs ? durationMs : i + j + delta;
-            scPaths.push(await extractRandomScreenshot(path, start, end));
+            if (start < end)
+              scPaths.push(await extractRandomScreenshot(path, start, end));
           }
         }
         screenshotPaths.push(scPaths);

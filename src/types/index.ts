@@ -1,6 +1,6 @@
 // Types and interfaces for the application\
 
-import { Transcript, TranscriptUtterance } from 'assemblyai';
+import { Transcript } from 'assemblyai';
 
 export type InputVideo = {
   url: string;
@@ -37,10 +37,17 @@ export type ExtractScreenshotResponse = PipelineResponse<{
   screenshotPaths: string[][];
 }>;
 
-export type TranscriptInternal = {
-  utterances: TranscriptUtterance[];
+export type UtteranceInternal = {
+  speaker: string;
+  text: string;
   start: number;
   end: number;
+};
+
+export type TranscriptInternal = {
+  start: number;
+  end: number;
+  utterances: UtteranceInternal[];
 };
 
 export type PromptSegment = {

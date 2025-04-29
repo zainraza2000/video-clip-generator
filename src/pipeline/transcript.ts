@@ -1,7 +1,6 @@
 import { AudioToTranscriptResponse } from "../types/index";
 import { logger } from "../utils/logger";
-import fsP from "fs/promises";
-import { generateTranscript } from "../services/transcription";
+import { generateTranscript } from "../services/transcriptionService";
 
 export async function audiosToTranscripts(
   audioPaths: string[]
@@ -10,8 +9,6 @@ export async function audiosToTranscripts(
     const transcripts = await Promise.all(
       audioPaths.map((audioPath) => generateTranscript(audioPath))
     );
-    // const jsonString = await fsP.readFile("transcript.json", "utf8"); // to remove
-    // const transcript = JSON.parse(jsonString) as Transcript; // to remove
 
     return {
       status: "success",

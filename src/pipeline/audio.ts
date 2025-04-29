@@ -1,4 +1,4 @@
-import { extractAudio } from "../services/audioExtractor";
+import { extractAudio } from "../services/audioExtractorService";
 import { VideoToAudioResponse } from "../types/index";
 import { logger } from "../utils/logger";
 
