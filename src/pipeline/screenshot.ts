@@ -55,9 +55,9 @@ export async function extractScreenshots(
 ): Promise<ExtractScreenshotResponse> {
   try {
     const intervalMs = intervalSeconds * 1000;
-    const screenshotPaths: string[][] = [];
+    const screenshotPaths: Record<number, string[]> = {};
     await Promise.all(
-      videosWithDuration.map(async (videoWithDuration) => {
+      videosWithDuration.map(async (videoWithDuration, index) => {
         const path = videoWithDuration.path;
         const durationMs = videoWithDuration.duration * 1000;
         const scPaths = [];
@@ -70,10 +70,13 @@ export async function extractScreenshots(
               scPaths.push(await extractRandomScreenshot(path, start, end));
           }
         }
-        screenshotPaths.push(scPaths);
+        screenshotPaths[index] = scPaths;
       })
     );
-    return { status: "success", data: { screenshotPaths } };
+    const finalPaths = Object.keys(screenshotPaths)
+      .sort((a, b) => Number(a) - Number(b))
+      .map((key) => screenshotPaths[Number(key)]);
+    return { status: "success", data: { screenshotPaths: finalPaths } };
   } catch (error: unknown) {
     const errorMessage =
       error instanceof Error ? error.message : "Unknown error";

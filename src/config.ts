@@ -36,3 +36,4 @@ export const LOG_LEVEL = process.env.LOG_LEVEL;
 
 export const TRANSCRIPTION_SEGMENT_INTERVAL = 5;
 export const SCREENSHOTS_PER_SEGMENT = 2;
+export const MIN_CLIP_DURATION = 4;

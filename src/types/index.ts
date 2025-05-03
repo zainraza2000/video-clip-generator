@@ -37,6 +37,11 @@ export type ExtractScreenshotResponse = PipelineResponse<{
   screenshotPaths: string[][];
 }>;
 
+export type FinalClipResponse = PipelineResponse<{
+  videoPath: string;
+  audioPath: string;
+}>;
+
 export type UtteranceInternal = {
   speaker: string;
   text: string;
@@ -98,4 +103,24 @@ export interface Transcription {
 export interface VideoInstance {
   transcription: Transcription;
   screenshot: string;
+}
+
+export interface Subtitle {
+  id: string;
+  startTime: string;
+  startSeconds: number;
+  endTime: string;
+  endSeconds: number;
+  text: string;
+}
+
+export interface CaptionOptions {
+  fontFamily?: string;
+  fontSize?: number;
+  fontColor?: string;
+  backgroundColor?: string;
+  boxOpacity?: number;
+  position?: 'center' | 'bottom' | 'top';
+  textStyle?: 'bold' | 'italic' | 'normal';
+  animation?: 'fade' | 'slide' | 'pop' | 'none';
 }

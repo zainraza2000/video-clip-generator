@@ -57,30 +57,28 @@ export function getTranscriptsByInterval(
   const transcriptsInternal: TranscriptInternal[] = [];
   for (let i = 0; i < duration; i += interval) {
     const words = getWordsByTime(transcript, i, i + interval);
-    const utterances = wordsToUtterances(words);
+    const utterances = words.length > 0 ? wordsToUtterances(words) : [];
     transcriptsInternal.push({ start: i, end: i + interval, utterances });
   }
   return transcriptsInternal;
 }
 
-// export function getTranscriptsByInterval(
-//   transcript: Transcript,
-//   interval: number,
-// ): TranscriptInternal[] {
-//   const allUtterances = transcript.utterances;
-//   const transcriptsInternal: TranscriptInternal[] = []
-//   for (let i = 0; i < transcript.audio_duration!; i += interval) {
-//     const intervalUtterances = (allUtterances || []).filter(
-//       (utterance) => (utterance.start >= (i * 1000)) && (utterance.start < ((i + interval) * 1000))
-//     );
-//     transcriptsInternal.push({
-//       start: i,
-//       end: i + interval,
-//       utterances: intervalUtterances,
-//     });
-//   }
-//   return transcriptsInternal;
-// }
+export async function getSubtitles(transcriptId: string) {
+  try {
+    const client = new AssemblyAI({
+      apiKey: ASSEMBLY_AI_API_KEY,
+    });
+
+    const subtitles = await client.transcripts.subtitles(transcriptId);
+
+    return subtitles;
+  } catch (error: unknown) {
+    const errorMessage =
+      error instanceof Error ? error.message : "Unknown error";
+    logger.error("Failed to generate subtitles", { error: errorMessage });
+    throw new Error(`Failed to generate subtitles: ${errorMessage}`);
+  }
+}
 
 export async function generateTranscript(
   audioFilePath: string,

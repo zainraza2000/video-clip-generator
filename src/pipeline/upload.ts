@@ -13,7 +13,6 @@ export async function uploadScreenshotsToCloud(screeshotPaths: string[]) {
         const mimeType =
           mime.lookup(originalName) || "application/octet-stream";
         const url = await uploadFile({ buffer, originalName, mimeType });
-        await fs.unlink(screenshotPath);
         return url;
       })
     );

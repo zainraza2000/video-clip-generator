@@ -2,6 +2,8 @@ import { PromptSegment, TranscriptInternal, UtteranceInternal } from "../types";
 import { CoreMessage, ImagePart } from "ai";
 import {
   buildSystemPrompt,
+  INDEX_TAG_END,
+  INDEX_TAG_START,
   VIDEO_TAG_END,
   VIDEO_TAG_START,
 } from "../utils/prompt";
@@ -13,7 +15,7 @@ export function utterancesToSentence(
   return utterances
     .map(
       (utterance) =>
-        `[${utterance.start} - ${utterance.end}] -- ${utterance.speaker}: ${utterance.text}`
+        `[${utterance.start} - ${utterance.end}] -- ${utterance?.speaker || "NARRATOR"}: ${utterance.text}`
     )
     .join("\n");
 }
@@ -55,8 +57,11 @@ export function preparePromptMessages(
       userPrompt
     )}`,
   });
-  prompSegmentsForVideos.forEach((promptSegments) => {
-    messages.push({ role: "user", content: `${VIDEO_TAG_START}` });
+  prompSegmentsForVideos.forEach((promptSegments, index) => {
+    messages.push({
+      role: "user",
+      content: `${VIDEO_TAG_START}\n${INDEX_TAG_START}${index}${INDEX_TAG_END}`,
+    });
     promptSegments.forEach((segment) => {
       messages.push({
         role: "user",
