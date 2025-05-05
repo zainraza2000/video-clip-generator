@@ -1,6 +1,8 @@
 // Types and interfaces for the application\
 
-import { Transcript } from 'assemblyai';
+import { Transcript } from "assemblyai";
+
+export type VideoResultType = "portrait" | "landscape";
 
 export type InputVideo = {
   url: string;
@@ -11,17 +13,19 @@ export type InputVideo = {
 export type VideoProcessMessage = {
   videos: InputVideo[];
   userPrompt?: string;
+  resultType?: VideoResultType;
 };
 
 export type PipelineResponse<T> =
-| {
-    status: "success";
-    data: T;
-  }
-| {
-    status: "error";
-    message: string;
-  };
+  | {
+      status: "success";
+      message?: string;
+      data: T;
+    }
+  | {
+      status: "error";
+      message: string;
+    };
 
 export type DownloadVideoResponse = PipelineResponse<{
   videoPaths: string[];
@@ -40,6 +44,10 @@ export type ExtractScreenshotResponse = PipelineResponse<{
 export type FinalClipResponse = PipelineResponse<{
   videoPath: string;
   audioPath: string;
+}>;
+
+export type FinalResponse = PipelineResponse<{
+  resultUrl: string;
 }>;
 
 export type UtteranceInternal = {
@@ -120,7 +128,7 @@ export interface CaptionOptions {
   fontColor?: string;
   backgroundColor?: string;
   boxOpacity?: number;
-  position?: 'center' | 'bottom' | 'top';
-  textStyle?: 'bold' | 'italic' | 'normal';
-  animation?: 'fade' | 'slide' | 'pop' | 'none';
+  position?: "center" | "bottom" | "top";
+  textStyle?: "bold" | "italic" | "normal";
+  animation?: "fade" | "slide" | "pop" | "none";
 }

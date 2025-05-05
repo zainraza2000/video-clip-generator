@@ -4,11 +4,15 @@ import {
   TRANSCRIPTION_SEGMENT_INTERVAL,
 } from "./config";
 import { extractScreenshots } from "./pipeline/screenshot";
-import { getTranscriptsByInterval } from "./services/transcriptionService";
+import {
+  getSubtitles,
+  getTranscriptsByInterval,
+} from "./services/transcriptionService";
 import {
   AudioToTranscriptResponse,
   DownloadVideoResponse,
   ExtractScreenshotResponse,
+  FinalResponse,
   PromptSegment,
   VideoProcessMessage,
   VideoToAudioResponse,
@@ -16,42 +20,66 @@ import {
 import fs from "fs";
 import { getPrompSegments, preparePromptMessages } from "./pipeline/prompt";
 import { downloadVideos } from "./pipeline/download";
-import { unwrapResponse } from "./utils/utils";
+import { errorResponse, unwrapResponse } from "./utils/utils";
 import { videosToAudios } from "./pipeline/audio";
 import { audiosToTranscripts } from "./pipeline/transcript";
-import { uploadScreenshotsToCloud } from "./pipeline/upload";
+import { uploadFileByPath, uploadScreenshotsToCloud } from "./pipeline/upload";
 import { cleanUp } from "./pipeline/cleanup";
 import { generateClips } from "./pipeline/llm";
 import logger from "./utils/logger";
+import { filterClips, generateFinalClip } from "./pipeline/clip";
+import fsP from "fs/promises";
+import { burnCaptions } from "./pipeline/caption";
+import { Clips } from "./schemas/clips";
+import { Transcript } from "assemblyai";
+import { getRandomFileName, uploadFile } from "./services/s3Service";
 
-export async function runPipeline(message: { Body: string }) {
+export async function runPipeline(message: {
+  Body: string;
+}): Promise<FinalResponse> {
   const messageBody: VideoProcessMessage = JSON.parse(message.Body);
 
   // Step 1: Download videos
   logger.info("Download Step");
   const dvRes: DownloadVideoResponse = await downloadVideos(messageBody.videos);
   const dvData = unwrapResponse(dvRes);
-  if (!dvData) return;
+  if (!dvData) return errorResponse(dvRes.message);
 
   // Step 2: Videos To Audio
+  // const dvData = {
+  //   videoPaths: Array.from(
+  //     { length: 5 },
+  //     (_, index) => `tmp/video-${index + 1}.mp4`
+  //   ),
+  // };
   logger.info("Video to audio step");
   const vaRes: VideoToAudioResponse = await videosToAudios(dvData.videoPaths);
   const vaData = unwrapResponse(vaRes);
-  if (!vaData) return;
+  if (!vaData) return errorResponse(vaRes.message);
 
-  // Step 3: Audios To Transcripts
+  // // Step 3: Audios To Transcripts
   logger.info("Audio to transcript step");
   const atRes: AudioToTranscriptResponse = await audiosToTranscripts(
     vaData.audioPaths
   );
   const atData = unwrapResponse(atRes);
-  if (!atData) return;
+  if (!atData) return errorResponse(atRes.message);
+  // const transcriptsStr = await fsP.readFile("transcripts.json", "utf8");
+  // const atData = {
+  //   transcripts: JSON.parse(transcriptsStr) as Transcript[],
+  // };
 
   // Step 4: Transcripts To Segments
   // transcriptSegments array contains an array of transcripts for each video, seperated by interval
   logger.info("Segmentation step");
   const transcriptSegments = atData.transcripts.map((transcript) =>
     getTranscriptsByInterval(transcript, TRANSCRIPTION_SEGMENT_INTERVAL * 1000)
+  );
+
+  await fsP.writeFile(
+    "transcriptSegments.json",
+    JSON.stringify(transcriptSegments),
+    "utf8"
   );
 
   // Step 5: Screenshots Extraction From Videos
@@ -67,13 +95,17 @@ export async function runPipeline(message: { Body: string }) {
     TRANSCRIPTION_SEGMENT_INTERVAL,
     SCREENSHOTS_PER_SEGMENT
   );
-
   const esData = unwrapResponse(esRes);
-  if (!esData) return;
+  if (!esData) return errorResponse(esRes.message);
+  await fsP.writeFile(
+    "screenshotPaths.json",
+    JSON.stringify(esData.screenshotPaths),
+    "utf8"
+  );
 
   // Step 6: Prepare prompt segments
   const allPromptSegments: PromptSegment[][] = [];
-  for (let i = 0; i < messageBody.videos.length; i++) {
+  for (let i = 0; i < 5; i++) {
     const videoTranscriptSegments = transcriptSegments[i];
     const videoScreenshots = esData.screenshotPaths[i];
     const totalSegments = videoTranscriptSegments.length;
@@ -90,27 +122,64 @@ export async function runPipeline(message: { Body: string }) {
     allPromptSegments.push(prompSegments);
   }
 
+  await fsP.writeFile(
+    "allPromptSegments.json",
+    JSON.stringify(allPromptSegments),
+    "utf8"
+  );
+
   // Step 7: Prepare prompt messages
   logger.info("Prepare prompt step");
   const promptMessages = preparePromptMessages(allPromptSegments, 20);
+  await fsP.writeFile(
+    "promptMessages.json",
+    JSON.stringify(promptMessages),
+    "utf8"
+  );
 
   // Step 8: Prompt LLM
   logger.info("prompt step");
-  const response = await generateClips(promptMessages);
+  const response: Clips = await generateClips(promptMessages);
 
   fs.writeFile("response.json", JSON.stringify(response), "utf8", (err) => {});
-
-  // Step 10: Create Clips
-
-  // Step 11: Get Final Clip Transcript
-  
-  // Step 12: Overlay Transcript
-  
-  // Step 13: Cleanup
+  // const response: Clips = JSON.parse(
+  //   await fsP.readFile("response.json", "utf8")
+  // );
+  // Step 10: Generate Final Video
+  logger.info("Final video step");
+  const fcRes = await generateFinalClip(
+    dvData.videoPaths,
+    filterClips(atData.transcripts, response),
+    "portrait"
+  );
+  const fcData = unwrapResponse(fcRes)
+  if (!fcData) return errorResponse(fcRes.message);
+  // Step 11: Cleanup Original Videos and Audios
+  logger.info("Temp cleanup step");
   await cleanUp(
     [...dvData.videoPaths, ...vaData.audioPaths],
+    // [],[]
     allPromptSegments.flat().flatMap((segment) => segment.images)
   );
+  // Step 12: Get Final Video Subtitiles
+  logger.info("Final video transcript step");
+  const fAtRes: AudioToTranscriptResponse = await audiosToTranscripts([
+    "final_clip.mp3",
+  ]);
+  const fAtData = unwrapResponse(fAtRes);
+  if (!fAtData) return errorResponse(fAtRes.message);
+  const transcript = atData.transcripts[0];
+  const subtitles = await getSubtitles(transcript.id);
+  // const subtitles = await fsP.readFile("subtitles.txt", "utf8");
+  await fsP.writeFile("subtitles.txt", "utf8");
 
+  // Step 13: Overlay Captions
+  logger.info("Final video captions step");
+  const outputPath = `${getRandomFileName()}_final.mp4`;
+  await burnCaptions(fcData.videoPath, subtitles, outputPath);
+  // Step 14: Upload result to storage service
+  const resultUrl = await uploadFileByPath(outputPath);
+  await cleanUp([fcData.videoPath], []);
+  return { status: "success", data: { resultUrl } };
   // if (message.ReceiptHandle) await deleteMessage(message.ReceiptHandle);
 }

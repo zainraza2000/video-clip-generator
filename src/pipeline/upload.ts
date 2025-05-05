@@ -8,12 +8,7 @@ export async function uploadScreenshotsToCloud(screeshotPaths: string[]) {
   try {
     const urls = await Promise.all(
       screeshotPaths.map(async (screenshotPath) => {
-        const buffer = await fs.readFile(screenshotPath);
-        const originalName = path.basename(screenshotPath);
-        const mimeType =
-          mime.lookup(originalName) || "application/octet-stream";
-        const url = await uploadFile({ buffer, originalName, mimeType });
-        return url;
+        return await uploadFileByPath(screenshotPath);
       })
     );
     return urls;
@@ -21,4 +16,13 @@ export async function uploadScreenshotsToCloud(screeshotPaths: string[]) {
     logger.error(JSON.stringify(ex), { service: "upload-service" });
     throw ex
   }
+}
+
+export async function uploadFileByPath(filePath: string){
+  const buffer = await fs.readFile(filePath);
+  const originalName = path.basename(filePath);
+  const mimeType =
+    mime.lookup(originalName) || "application/octet-stream";
+  const url = await uploadFile({ buffer, originalName, mimeType });
+  return url
 }

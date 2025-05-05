@@ -64,7 +64,6 @@
 //       .run();
 //   });
 // }
-
 import * as fs from "fs";
 import ffmpeg from "fluent-ffmpeg";
 import { promisify } from "util";
@@ -74,7 +73,7 @@ import { SrtParser } from "../services/srtParser";
 import crypto from "crypto";
 import logger from "../utils/logger";
 
-// Promisify fs.exists for cleaner async usage
+// Promisify fs functions
 const exists = promisify(fs.exists);
 const mkdir = promisify(fs.mkdir);
 const writeFile = promisify(fs.writeFile);
@@ -92,15 +91,19 @@ export interface TikTokCaptionOptions {
   outlineWidth?: number;
 
   // Growth animation settings
-  startScale?: number; // Starting scale percentage (e.g., 50 = 50%)
-  endScale?: number; // Ending scale percentage (e.g., 100 = 100%)
+  startScale?: number;
+  endScale?: number;
 
   // Line width for automatic line breaking
-  lineWidth?: number; // Max width in characters per line
+  lineWidth?: number;
 
   // Text effects
   bold?: boolean;
   animationDuration?: number;
+  
+  // Video dimensions (will be auto-detected if not provided)
+  videoWidth?: number;
+  videoHeight?: number;
 }
 
 /**
@@ -112,17 +115,43 @@ const defaultOptions: TikTokCaptionOptions = {
   fontColor: "FFFFFF",
   outlineColor: "000000",
   outlineWidth: 2,
-  startScale: 30, // Start at 30% of normal size
-  endScale: 100, // End at 100% (normal size)
-  animationDuration: 1000, // Growth animation lasts 1000ms
-  lineWidth: 30, // Max 30 characters per line
+  startScale: 30,
+  endScale: 100,
+  animationDuration: 1000,
+  lineWidth: 30,
   bold: true,
 };
 
 /**
+ * Gets video dimensions using ffmpeg
+ * @param videoPath Path to the video file
+ * @returns Promise with video width and height
+ */
+function getVideoDimensions(videoPath: string): Promise<{width: number, height: number}> {
+  return new Promise((resolve, reject) => {
+    ffmpeg.ffprobe(videoPath, (err, metadata) => {
+      if (err) {
+        reject(err);
+        return;
+      }
+      
+      const videoStream = metadata.streams.find(stream => stream.codec_type === 'video');
+      if (!videoStream) {
+        reject(new Error('No video stream found'));
+        return;
+      }
+      
+      resolve({
+        width: videoStream.width || 1280,
+        height: videoStream.height || 720
+      });
+    });
+  });
+}
+
+/**
  * Converts SRT file to ASS format with TikTok-style animations
- *
- * @param srtFilePath Path to the input SRT subtitle file
+ * @param srtContent Content of the SRT file
  * @param options Caption styling and animation options
  * @returns Path to the generated ASS file
  */
@@ -159,8 +188,6 @@ async function convertSrtToAnimatedAss(
  * Converts SRT timestamp to ASS timestamp format
  */
 function convertTimeFormat(srtTime: string): string {
-  // SRT format: 00:00:00,000
-  // ASS format: 0:00:00.00
   const parts = srtTime.split(",");
   const timePart = parts[0].replace(/^0/, "");
   const millisecondsPart = parts[1].substring(0, 2);
@@ -175,21 +202,62 @@ function generateAnimatedAss(
   subtitles: Subtitle[],
   options: TikTokCaptionOptions
 ): string {
-  // Build ASS header
+  // Determine if it's portrait or landscape mode based on dimensions
+  const isPortrait = (options.videoHeight || 720) > (options.videoWidth || 1280);
+  
+  // Set appropriate PlayResX and PlayResY based on video orientation
+  const playResX = options.videoWidth || 1280;
+  const playResY = options.videoHeight || 720;
+  
+  // Calculate the base font size
+  // For portrait videos, we want to scale relative to width, but keep it larger
+  let fontSize = options.fontSize || 40;
+  
+  if (isPortrait) {
+    // For portrait, use a percentage of video width for font size
+    // This ensures better readability on narrow videos
+    const portraitFontSizePercentage = 0.08; // 8% of video width
+    fontSize = Math.max(
+      Math.round(playResX * portraitFontSizePercentage), 
+      30  // Minimum font size of 30
+    );
+  }
+  
+  // Calculate line width - how many characters per line
+  // For portrait, we want fewer characters per line
+  let lineWidth = options.lineWidth || 30;
+  if (isPortrait) {
+    // Use approximately 60% of the standard line width for portrait
+    lineWidth = Math.min(
+      Math.round(lineWidth * 0.6),
+      Math.floor(playResX / (fontSize * 0.6))  // Estimate chars that fit width
+    );
+    // Ensure a minimum reasonable line width
+    lineWidth = Math.max(15, lineWidth);
+  }
+  
+  // Determine bottom margin based on orientation
+  // For portrait videos, position captions higher from bottom (TikTok style)
+  const marginV = isPortrait ? Math.round(playResY * 0.15) : 30; // 15% from bottom in portrait
+  
+  // For portrait videos, increase outline width slightly for better visibility
+  const outlineWidth = isPortrait ? (options.outlineWidth || 2) + 0.5 : (options.outlineWidth || 2);
+
+  // Build ASS header with dynamic dimensions
   let assContent = `[Script Info]
 ScriptType: v4.00+
-PlayResX: 1280
-PlayResY: 720
+PlayResX: ${playResX}
+PlayResY: ${playResY}
 ScaledBorderAndShadow: yes
 WrapStyle: 2
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: TikTok,${options.fontName},${options.fontSize},&H00${
+Style: TikTok,${options.fontName},${fontSize},&H00${
     options.fontColor
   },&H000000FF,&H00${options.outlineColor},&H00000000,${
     options.bold ? "-1" : "0"
-  },0,0,0,100,100,0,0,1,${options.outlineWidth},0,2,20,20,30,1
+  },0,0,0,100,100,0,0,1,${outlineWidth},0,2,20,20,${marginV},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -200,13 +268,13 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     const startTime = convertTimeFormat(sub.startTime);
     const endTime = convertTimeFormat(sub.endTime);
 
-    // Apply text wrapping
-    const wrappedText = wrapText(sub.text, options.lineWidth || 25);
+    // Apply text wrapping with adjusted line width
+    const wrappedText = wrapText(sub.text, lineWidth);
 
-    // Apply grow animation (bottom-centered text that grows from small to normal)
+    // Apply grow animation
     const animatedText = applyGrowAnimation(wrappedText, options);
 
-    // Add dialogue line with animation (bottom-center alignment is handled with \an2)
+    // Add dialogue line with animation
     assContent += `Dialogue: 0,${startTime},${endTime},TikTok,,0,0,0,,${animatedText}\n`;
   });
 
@@ -215,76 +283,49 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
 /**
  * Wraps text to fit within a specified character width
- *
- * @param text Text to wrap
- * @param lineWidth Maximum characters per line
- * @returns Text with line breaks inserted
  */
 function wrapText(text: string, lineWidth: number): string {
-  // Split into words
   const words = text.split(" ");
   const lines: string[] = [];
   let currentLine = "";
 
-  // Process each word
   words.forEach((word) => {
-    // If adding this word would exceed line width
     if ((currentLine + " " + word).length > lineWidth && currentLine !== "") {
       lines.push(currentLine);
       currentLine = word;
     } else {
-      // Add word to current line (with space if not first word)
       currentLine = currentLine === "" ? word : currentLine + " " + word;
     }
   });
 
-  // Add the last line if not empty
   if (currentLine !== "") {
     lines.push(currentLine);
   }
 
-  // Join lines with ASS line break tag
   return lines.join("\\N");
 }
 
 /**
  * Applies a growing animation to the subtitle text
- * Creates an effect where text starts small and grows to normal size
- *
- * @param text Text to animate
- * @param options Animation options
- * @returns Text with ASS animation tags
  */
 function applyGrowAnimation(
   text: string,
   options: TikTokCaptionOptions
 ): string {
-  // Default animation duration if not specified (200ms)
   const animDuration = options.animationDuration || 200;
   const startScale = options.startScale || 10;
-  // Calculate the time for transform in ASS centiseconds (1/100 of a second)
   const animDurationCs = animDuration / 10;
 
-  // Start with a scale of 10% (0.1) and grow to 100% (1.0)
-  // \t(start_time, end_time, \style_tag_initial, \style_tag_final)
-  // We use \fscx and \fscy for scaling the text horizontally and vertically
   const transformTags = `\\fscx${startScale}\\fscy${startScale}\\t(0,${animDurationCs},\\fscx100\\fscy100)`;
 
   // Center alignment at the bottom
   const alignmentTag = "\\an2";
 
-  // Combine all tags with the text
   return `{${alignmentTag}${transformTags}}${text}`;
 }
 
 /**
- * Burns animated captions into an MP4 video file with TikTok-style effects
- *
- * @param inputVideoPath Path to the input MP4 video file
- * @param subtitlePath Path to the SRT subtitle file
- * @param outputVideoPath Path for the output video with burnt-in subtitles
- * @param options Optional caption styling and animation options
- * @returns Promise that resolves when the process is complete
+ * Burns animated captions into a video file with TikTok-style effects
  */
 export async function burnTikTokCaptions(
   inputVideoPath: string,
@@ -293,33 +334,37 @@ export async function burnTikTokCaptions(
   options: TikTokCaptionOptions = {}
 ): Promise<void> {
   try {
-    // Ensure input files exist
+    // Ensure input file exists
     if (!(await exists(inputVideoPath))) {
       throw new Error(`Input video file not found: ${inputVideoPath}`);
     }
 
+    // Detect video dimensions
+    const dimensions = await getVideoDimensions(inputVideoPath);
+    console.log(`Video dimensions: ${dimensions.width}x${dimensions.height}`);
+    
+    // Add dimensions to options
+    const enhancedOptions: TikTokCaptionOptions = {
+      ...options,
+      videoWidth: dimensions.width,
+      videoHeight: dimensions.height
+    };
+
     // Convert SRT to ASS with animations
-    const assFilePath = await convertSrtToAnimatedAss(srtContent, options);
+    const assFilePath = await convertSrtToAnimatedAss(srtContent, enhancedOptions);
 
     // Return a promise that resolves when processing is complete
     return new Promise((resolve, reject) => {
-      // Create ffmpeg command
       ffmpeg(inputVideoPath)
-        // Add ASS subtitle filter - without the problematic ignore_loop option
         .videoFilter(`ass=${assFilePath}`)
-        // Configure video codec
         .videoCodec("libx264")
         .addOption("-preset", "medium")
-        // Copy audio stream without re-encoding
         .audioCodec("copy")
-        // Set output path
         .output(outputVideoPath)
-        // Log ffmpeg process
         .on("start", (commandLine) => {
           console.log(`FFmpeg process started: ${commandLine}`);
         })
         .on("progress", (progress) => {
-          // Optional: log progress if desired
           if (progress.percent) {
             console.log(`Processing: ${Math.round(progress.percent)}% done`);
           }
@@ -331,11 +376,11 @@ export async function burnTikTokCaptions(
           fs.unlink(assFilePath, () => {});
           resolve();
         })
-        // Run the process
         .run();
     });
   } catch (ex) {
     logger.error(JSON.stringify(ex), { service: "caption-service" });
+    throw ex; // Re-throw to allow caller to handle the error
   }
 }
 
