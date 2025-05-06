@@ -55,28 +55,36 @@ export async function extractScreenshots(
 ): Promise<ExtractScreenshotResponse> {
   try {
     const intervalMs = intervalSeconds * 1000;
-    const screenshotPaths: Record<number, string[]> = {};
-    await Promise.all(
-      videosWithDuration.map(async (videoWithDuration, index) => {
-        const path = videoWithDuration.path;
-        const durationMs = videoWithDuration.duration * 1000;
-        const scPaths = [];
-        for (let i = 0; i < durationMs; i += intervalMs) {
-          const delta = intervalMs / screenshotsPerInterval;
-          for (let j = 0; j < intervalMs; j += delta) {
-            const start = i + j;
-            const end = i + j + delta > durationMs ? durationMs : i + j + delta;
-            if (start < end)
-              scPaths.push(await extractRandomScreenshot(path, start, end));
+    
+    // Create an array to hold all screenshot paths, initialized with the correct structure
+    const allScreenshotPaths: string[][] = new Array(videosWithDuration.length).fill(null).map(() => []);
+    
+    // Process each video sequentially to avoid any potential race conditions
+    for (let videoIndex = 0; videoIndex < videosWithDuration.length; videoIndex++) {
+      const { path, duration } = videosWithDuration[videoIndex];
+      const durationMs = duration * 1000;
+      
+      // Extract screenshots for this video
+      for (let i = 0; i < durationMs; i += intervalMs) {
+        const delta = intervalMs / screenshotsPerInterval;
+        for (let j = 0; j < intervalMs; j += delta) {
+          const start = i + j;
+          const end = i + j + delta > durationMs ? durationMs : i + j + delta;
+          if (start < end) {
+            const screenshot = await extractRandomScreenshot(path, start, end);
+            // Add directly to the correct array
+            allScreenshotPaths[videoIndex].push(screenshot);
           }
         }
-        screenshotPaths[index] = scPaths;
-      })
-    );
-    const finalPaths = Object.keys(screenshotPaths)
-      .sort((a, b) => Number(a) - Number(b))
-      .map((key) => screenshotPaths[Number(key)]);
-    return { status: "success", data: { screenshotPaths: finalPaths } };
+      }
+    }
+    
+    return { 
+      status: "success", 
+      data: { 
+        screenshotPaths: allScreenshotPaths 
+      } 
+    };
   } catch (error: unknown) {
     const errorMessage =
       error instanceof Error ? error.message : "Unknown error";

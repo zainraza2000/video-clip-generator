@@ -13,7 +13,10 @@ export async function cleanUp(localPaths: string[], urls: string[]) {
       : urlObj.pathname;
     return key;
   });
-  await Promise.all([deleteFiles(localPaths), removeFiles(fileKeys)]);
+  const promises = []
+  promises.push(deleteFiles(localPaths))
+  if(urls.length > 0) promises.push(removeFiles(fileKeys))
+  await Promise.all(promises);
 }
 
 export function cleanUpTmpDir(): void {

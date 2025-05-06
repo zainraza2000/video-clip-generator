@@ -128,27 +128,37 @@ const createPaddedClip = async (
       const targetAspectRatio = ASPECT_RATIOS[resultType];
       const targetResolution = TARGET_RESOLUTIONS[resultType];
 
-      // Optimize logging - reduce unnecessary logs for better performance
+      // Extract framerate as a numeric value for consistency
+      const frameRateParts = videoInfo.frameRate.split("/");
+      const targetFps = Math.round(
+        parseInt(frameRateParts[0]) / parseInt(frameRateParts[1])
+      );
+
       logger.info(`Processing video: ${path.basename(sourceVideo)}`, {
         service: "clip-service",
         dimensions: `${videoInfo.width}x${videoInfo.height}`,
         targetResolution: `${targetResolution.width}x${targetResolution.height}`,
+        fps: targetFps,
       });
 
       try {
-        // Simplified and optimized filter chain
+        // Improved filter chain for better quality
         let filterCommand;
 
-        // Optimize the blur amount based on resolution to save processing time
-        // Lower blur values for faster processing, still effective visually
+        // Calculate blur based on resolution but with better quality/performance balance
         const blurAmount = Math.min(
-          10,
-          Math.max(5, Math.floor(targetResolution.width / 200))
+          20,
+          Math.max(8, Math.floor(targetResolution.width / 150))
         );
 
+        // More efficient filter chain with downscaling before blur for performance
         filterCommand =
           `[0:v]split=2[original][forblur];` +
-          `[forblur]scale=${targetResolution.width}:${targetResolution.height},boxblur=${blurAmount}:2[blurred];` +
+          // Downscale before blur for better performance
+          `[forblur]scale=${targetResolution.width / 2}:${
+            targetResolution.height / 2
+          },` +
+          `boxblur=${blurAmount}:2,scale=${targetResolution.width}:${targetResolution.height}[blurred];` +
           `[original]`;
 
         // Add the appropriate scaling based on orientation and source aspect ratio
@@ -162,32 +172,37 @@ const createPaddedClip = async (
           filterCommand += `scale=-1:${targetResolution.height}`;
         }
 
+        // Add fps filter to ensure consistent frame rate
+        filterCommand += `,fps=fps=${targetFps}`;
+
         // Complete the filter command with the overlay
         filterCommand +=
           `[scaled];` + `[blurred][scaled]overlay=(W-w)/2:(H-h)/2`;
 
-        // Create the clip with optimized output options
+        // Create the clip with balanced quality/speed settings
         const command = ffmpeg(sourceVideo)
           .setStartTime(startTime)
           .setDuration(duration)
           .videoFilter(filterCommand)
           .outputOptions([
             "-c:v libx264",
-            // Choose encoding preset based on clip duration for speed/quality balance
-            duration > 10 ? "-preset veryfast" : "-preset ultrafast",
-            // Slightly increase CRF for speed (lower quality but faster)
-            "-crf 25",
+            // Better balanced preset
+            "-preset medium",
+            // Better quality CRF
+            "-crf 22",
+            // Better audio handling
             "-c:a aac",
-            "-b:a 128k", // Lower bitrate for faster processing
+            "-b:a 192k",
+            "-vsync 1",
+            "-async 1",
             `-ar ${videoInfo.sampleRate}`,
             "-movflags +faststart",
-            "-threads 0", // Use maximum threads available
+            "-threads 0",
           ]);
 
-        // Reduce logging frequency for better performance
+        // Log progress but less frequently
         command.on("progress", (progress) => {
           if (progress.percent && progress.percent % 20 === 0) {
-            // Only log every 20%
             logger.info(`Processing clip: ${Math.round(progress.percent)}%`, {
               service: "clip-service",
             });
@@ -199,23 +214,25 @@ const createPaddedClip = async (
             service: "clip-service",
           });
 
-          // Simpler fallback for faster processing
-          logger.info("Attempting fallback with simpler scaling...", {
+          // Better fallback with reasonable quality
+          logger.info("Attempting fallback with simpler approach...", {
             service: "clip-service",
           });
 
-          // Use a simpler approach with less blur for the fallback
           ffmpeg(sourceVideo)
             .setStartTime(startTime)
             .setDuration(duration)
             .outputOptions([
-              `-vf scale=${targetResolution.width}:${targetResolution.height}:force_original_aspect_ratio=1,pad=${targetResolution.width}:${targetResolution.height}:(ow-iw)/2:(oh-ih)/2`,
+              `-vf scale=${targetResolution.width}:${targetResolution.height}:force_original_aspect_ratio=1,` +
+                `pad=${targetResolution.width}:${targetResolution.height}:(ow-iw)/2:(oh-ih)/2,fps=fps=${targetFps}`,
               "-c:v libx264",
-              "-preset ultrafast",
-              "-crf 28", // Higher CRF for faster encoding
+              "-preset fast", // Better fallback preset
+              "-crf 23", // Better quality but still fast
               "-c:a aac",
-              "-b:a 128k", // Lower audio bitrate
-              "-threads 0", // Maximum threads
+              "-b:a 128k",
+              "-vsync 1",
+              "-async 1",
+              "-threads 0",
             ])
             .on("error", (fallbackErr) => {
               logger.error(`Fallback scaling failed: ${fallbackErr}`, {
@@ -255,226 +272,327 @@ const createPaddedClip = async (
     }
   });
 };
-
-// Optimized helper function to concatenate clips using more efficient method
+/**
+ * Concatenates multiple video clips into a single video and creates an audio version
+ * @param clipPaths Array of paths to video clips to concatenate
+ * @param outputVideoPath Path to save the concatenated video
+ * @param outputAudioPath Path to save the extracted audio
+ * @returns Promise resolving to true on success, false on failure
+ */
 const concatenateClips = async (
   clipPaths: string[],
   outputVideoPath: string,
   outputAudioPath: string
 ): Promise<boolean> => {
+  // Early validation
+  if (clipPaths.length === 0) {
+    logger.error("No clip paths provided for concatenation", {
+      service: "clip-service",
+    });
+    return false;
+  }
+
+  // Handle single clip case more efficiently
+  if (clipPaths.length === 1) {
+    return handleSingleClip(clipPaths[0], outputVideoPath, outputAudioPath);
+  }
+
+  // For multiple clips, first get metadata from first clip
+  try {
+    const metadata = await getVideoMetadata(clipPaths[0]);
+    const targetFps = calculateFrameRate(metadata);
+    return await performConcatenation(
+      clipPaths,
+      outputVideoPath,
+      outputAudioPath,
+      targetFps
+    );
+  } catch (err) {
+    logger.error(`Failed during concatenation process: ${err}`, {
+      service: "clip-service",
+    });
+    // Try with default settings as final fallback
+    return await performConcatenation(
+      clipPaths,
+      outputVideoPath,
+      outputAudioPath
+    );
+  }
+};
+
+/**
+ * Get video metadata using ffprobe
+ */
+const getVideoMetadata = (clipPath: string): Promise<any> => {
+  return new Promise((resolve, reject) => {
+    ffmpeg.ffprobe(clipPath, (err, metadata) => {
+      if (err) {
+        reject(err);
+        return;
+      }
+      resolve(metadata);
+    });
+  });
+};
+
+/**
+ * Calculate target frame rate from metadata
+ */
+const calculateFrameRate = (metadata: any): number => {
+  try {
+    const videoStream = metadata.streams.find(
+      (s: any) => s.codec_type === "video"
+    );
+    if (!videoStream || !videoStream.r_frame_rate) {
+      return 30; // Default if not found
+    }
+
+    const frameRateParts = videoStream.r_frame_rate.split("/");
+    return Math.round(
+      parseInt(frameRateParts[0]) / parseInt(frameRateParts[1])
+    );
+  } catch (e) {
+    logger.warn(`Error calculating frame rate, using default: ${e}`, {
+      service: "clip-service",
+    });
+    return 30;
+  }
+};
+
+/**
+ * Handle the simple case of a single clip
+ */
+const handleSingleClip = (
+  clipPath: string,
+  outputVideoPath: string,
+  outputAudioPath: string
+): Promise<boolean> => {
   return new Promise((resolve) => {
-    try {
-      // Check if we have clips to concatenate
-      if (clipPaths.length === 0) {
-        logger.error("No clip paths provided for concatenation", {
+    // For single clips, use copy codec to avoid re-encoding
+    ffmpeg(clipPath)
+      .outputOptions(["-c copy", "-map 0", "-threads 0"])
+      .output(outputVideoPath)
+      .on("error", (err) => {
+        logger.error(`Error copying video: ${err}`, {
           service: "clip-service",
         });
         resolve(false);
-        return;
-      }
-
-      // If we only have one clip, just copy it as the final output
-      if (clipPaths.length === 1) {
-        const command = ffmpeg(clipPaths[0]);
-
-        // Use copy codec to avoid re-encoding for better performance
-        command
-          .output(outputVideoPath)
-          .outputOptions([
-            "-c copy", // Direct stream copy without re-encoding
-            "-threads 0", // Use all available threads
-          ])
-          .on("error", (err) => {
-            logger.error(`Error copying video: ${err}`, {
-              service: "clip-service",
-            });
-            resolve(false);
-          })
-          .on("end", () => {
-            // After video is created, extract audio in a separate step
-            ffmpeg(outputVideoPath)
-              .output(outputAudioPath)
-              .outputOptions([
-                "-vn",
-                "-c:a libmp3lame",
-                "-q:a 4", // Lower quality for faster encoding
-                "-threads 0", // Use all available threads
-              ])
-              .on("error", (err) => {
-                logger.error(`Error extracting audio: ${err}`, {
-                  service: "clip-service",
-                });
-                // Continue even if audio extraction fails
-                resolve(true);
-              })
-              .on("end", () => {
-                resolve(true);
-              })
-              .run();
-          })
-          .run();
-        return;
-      }
-
-      // Optimized concatenation - using the concat demuxer for more efficiency
-      const listFilePath = path.join(
-        process.cwd(),
-        "tmp",
-        `concat_list_${Date.now()}.txt`
-      );
-      let fileContent = "";
-      clipPaths.forEach((clip) => {
-        fileContent += `file '${clip.replace(/'/g, "'\\''")}'` + "\n";
-      });
-
-      try {
-        fs.writeFileSync(listFilePath, fileContent);
-      } catch (err) {
-        logger.error(`Error writing concat list file: ${err}`, {
-          service: "clip-service",
-        });
-        if (clipPaths.length > 0) {
-          fs.copyFileSync(clipPaths[0], outputVideoPath);
-          logger.info(`Fallback to first clip due to list file error`, {
+      })
+      .on("end", async () => {
+        try {
+          await extractAudio(outputVideoPath, outputAudioPath);
+          resolve(true);
+        } catch (err) {
+          // Continue even if audio extraction fails
+          logger.warn(`Audio extraction failed but video succeeded: ${err}`, {
             service: "clip-service",
           });
           resolve(true);
-        } else {
-          resolve(false);
         }
-        return;
-      }
+      })
+      .run();
+  });
+};
 
-      // Use concat demuxer for faster concatenation without re-encoding
-      const videoCommand = ffmpeg()
-        .input(listFilePath)
-        .inputOptions(["-f concat", "-safe 0"])
-        .outputOptions([
-          "-c copy", // Use stream copy for faster processing
-          "-movflags +faststart",
-          "-threads 0", // Use all available threads
-        ])
-        .output(outputVideoPath)
-        .on("error", (err) => {
-          logger.error(`Error concatenating video: ${err}`, {
-            service: "clip-service",
-          });
+/**
+ * Extract audio from video
+ */
+const extractAudio = (videoPath: string, audioPath: string): Promise<void> => {
+  return new Promise((resolve, reject) => {
+    ffmpeg(videoPath)
+      .outputOptions(["-vn", "-c:a libmp3lame", "-q:a 3", "-threads 0"])
+      .output(audioPath)
+      .on("error", reject)
+      .on("end", () => resolve())
+      .run();
+  });
+};
 
-          // Try fallback with re-encoding if direct copy fails
-          logger.info("Fallback to concatenation with re-encoding", {
-            service: "clip-service",
-          });
-          ffmpeg()
-            .input(listFilePath)
-            .inputOptions(["-f concat", "-safe 0"])
-            .outputOptions([
-              "-c:v libx264",
-              "-preset ultrafast",
-              "-crf 28",
-              "-c:a aac",
-              "-b:a 128k",
-              "-threads 0",
-            ])
-            .output(outputVideoPath)
-            .on("error", (fallbackErr) => {
-              logger.error(`Fallback concatenation failed: ${fallbackErr}`, {
-                service: "clip-service",
-              });
-              if (clipPaths.length > 0) {
-                logger.info("Using first clip as fallback", {
-                  service: "clip-service",
-                });
-                try {
-                  fs.copyFileSync(clipPaths[0], outputVideoPath);
-                  resolve(true);
-                } catch (copyErr) {
-                  logger.error(`Error copying fallback clip: ${copyErr}`, {
-                    service: "clip-service",
-                  });
-                  resolve(false);
-                }
-              } else {
-                resolve(false);
-              }
-            })
-            .on("end", finalizeAudio)
-            .run();
-        })
-        .on("end", finalizeAudio)
-        .run();
+/**
+ * Perform the actual concatenation with primary and fallback strategies
+ */
+const performConcatenation = async (
+  clipPaths: string[],
+  outputVideoPath: string,
+  outputAudioPath: string,
+  fps: number = 30
+): Promise<boolean> => {
+  // Try filter complex approach first
+  const filterSuccess = await tryFilterComplexConcatenation(
+    clipPaths,
+    outputVideoPath,
+    fps
+  );
 
-      // Function to create audio after video is done
-      function finalizeAudio() {
-        // Clean up the list file
-        try {
-          fs.unlinkSync(listFilePath);
-        } catch (unlinkErr) {
-          logger.warn(`Failed to delete concat list file: ${unlinkErr}`, {
-            service: "clip-service",
-          });
-        }
+  // If filter complex failed, try concat demuxer approach
+  if (!filterSuccess) {
+    const demuxerSuccess = await tryConcatDemuxerConcatenation(
+      clipPaths,
+      outputVideoPath
+    );
+    if (!demuxerSuccess) {
+      return false;
+    }
+  }
 
-        // Create audio file
-        ffmpeg(outputVideoPath)
-          .output(outputAudioPath)
-          .outputOptions([
-            "-vn",
-            "-c:a libmp3lame",
-            "-q:a 4", // Lower quality for faster encoding
-            "-threads 0", // Use all available threads
-          ])
-          .on("error", (err) => {
-            logger.error(`Error creating audio output: ${err}`, {
-              service: "clip-service",
-            });
-            // Continue even if audio extraction fails
-            resolve(true);
-          })
-          .on("end", () => {
-            resolve(true);
-          })
-          .run();
-      }
-    } catch (err) {
-      logger.error(`Exception in concatenateClips: ${err}`, {
-        service: "clip-service",
+  // At this point, we have a successful video concatenation, extract audio
+  try {
+    await extractAudio(outputVideoPath, outputAudioPath);
+    return true;
+  } catch (err) {
+    // Continue even if audio extraction fails
+    logger.warn(`Audio extraction failed but video succeeded: ${err}`, {
+      service: "clip-service",
+    });
+    return true;
+  }
+};
+
+/**
+ * Try concatenation using the filter complex approach (most reliable)
+ */
+const tryFilterComplexConcatenation = (
+  clipPaths: string[],
+  outputPath: string,
+  fps: number
+): Promise<boolean> => {
+  return new Promise((resolve) => {
+    try {
+      // Build the concat command
+      const command = ffmpeg();
+
+      // Add all input files
+      clipPaths.forEach((clip) => {
+        command.input(clip);
       });
 
-      // Fallback to first clip
-      if (clipPaths.length > 0) {
-        try {
-          logger.info("Falling back to first clip due to exception", {
-            service: "clip-service",
-          });
-          fs.copyFileSync(clipPaths[0], outputVideoPath);
+      // Create filter complex string for consistent frame rate
+      const filterComplex = [
+        // Ensure consistent frame rate and scaling for all inputs
+        ...clipPaths.map((_, i) => `[${i}:v]fps=fps=${fps}[v${i}]`),
+        // Concatenate video streams
+        clipPaths.map((_, i) => `[v${i}][${i}:a]`).join("") +
+          `concat=n=${clipPaths.length}:v=1:a=1[outv][outa]`,
+      ];
 
-          // Create audio from the first clip
-          ffmpeg(clipPaths[0])
-            .output(outputAudioPath)
-            .outputOptions(["-vn", "-c:a libmp3lame", "-q:a 4", "-threads 0"])
-            .on("error", (err) => {
-              logger.error(`Error extracting audio in fallback: ${err}`, {
-                service: "clip-service",
-              });
-              resolve(true);
-            })
-            .on("end", () => {
-              resolve(true);
-            })
-            .run();
-        } catch (copyErr) {
-          logger.error(`Error in fallback copying: ${copyErr}`, {
-            service: "clip-service",
-          });
-          resolve(false);
-        }
-      } else {
+      command.complexFilter(filterComplex);
+
+      // Set output options
+      command.outputOptions([
+        "-map [outv]",
+        "-map [outa]",
+        "-c:v libx264",
+        "-preset medium",
+        "-crf 22",
+        "-c:a aac",
+        "-b:a 192k",
+        "-movflags +faststart",
+        "-threads 0",
+      ]);
+
+      command.output(outputPath);
+
+      // Handle errors and completion
+      command.on("error", (err) => {
+        logger.warn(`Filter complex concatenation failed: ${err}`, {
+          service: "clip-service",
+        });
         resolve(false);
-      }
+      });
+
+      command.on("end", () => {
+        logger.info("Filter complex concatenation successful", {
+          service: "clip-service",
+        });
+        resolve(true);
+      });
+
+      command.run();
+    } catch (err) {
+      logger.error(`Exception in filter complex concatenation: ${err}`, {
+        service: "clip-service",
+      });
+      resolve(false);
     }
   });
 };
 
+/**
+ * Try concatenation using the concat demuxer approach (fallback)
+ */
+const tryConcatDemuxerConcatenation = (
+  clipPaths: string[],
+  outputPath: string
+): Promise<boolean> => {
+  return new Promise((resolve) => {
+    try {
+      // Create a temporary file that lists all clips to concatenate
+      const tempDir = path.join(process.cwd(), "tmp");
+      // Ensure temp directory exists
+      if (!fs.existsSync(tempDir)) {
+        fs.mkdirSync(tempDir, { recursive: true });
+      }
+
+      const listFilePath = path.join(tempDir, `concat_list_${Date.now()}.txt`);
+
+      // Create file content listing all clips
+      const fileContent = clipPaths
+        .map((clip) => {
+          return `file '${clip.replace(/'/g, "'\\''")}'`;
+        })
+        .join("\n");
+
+      // Write the file
+      fs.writeFileSync(listFilePath, fileContent);
+
+      // Run the concat command
+      ffmpeg()
+        .input(listFilePath)
+        .inputOptions(["-f concat", "-safe 0"])
+        .outputOptions([
+          "-c:v libx264",
+          "-preset medium",
+          "-crf 22",
+          "-c:a aac",
+          "-b:a 192k",
+          "-vsync 1",
+          "-async 1",
+          "-threads 0",
+        ])
+        .output(outputPath)
+        .on("error", (err) => {
+          logger.error(`Concat demuxer concatenation failed: ${err}`, {
+            service: "clip-service",
+          });
+          // Clean up temp file
+          try {
+            fs.unlinkSync(listFilePath);
+          } catch (e) {
+            // Ignore cleanup errors
+          }
+          resolve(false);
+        })
+        .on("end", () => {
+          logger.info("Concat demuxer concatenation successful", {
+            service: "clip-service",
+          });
+          // Clean up temp file
+          try {
+            fs.unlinkSync(listFilePath);
+          } catch (e) {
+            // Ignore cleanup errors
+          }
+          resolve(true);
+        })
+        .run();
+    } catch (err) {
+      logger.error(`Exception in concat demuxer concatenation: ${err}`, {
+        service: "clip-service",
+      });
+      resolve(false);
+    }
+  });
+};
 /**
  * Optimized function that generates a final clip from multiple video segments with specified aspect ratio
  * @param videoPaths Array of paths to source videos
@@ -485,9 +603,10 @@ const concatenateClips = async (
 export async function generateFinalClip(
   videoPaths: string[],
   clips: Clips,
-  resultType: VideoResultType = "landscape"
+  resultType: VideoResultType = "portrait"
 ): Promise<FinalClipResponse> {
   // Create temp directory for storing clip segments
+  const start = new Date();
   const tempDir = path.join(process.cwd(), "tmp");
   const clipPaths: string[] = [];
 
@@ -639,7 +758,8 @@ export async function generateFinalClip(
       logger.info(`Final ${resultType} clip generated successfully`, {
         service: "clip-service",
       });
-
+      const end = new Date();
+      logger.info(`${end.getTime() - start.getTime()}`);
       return {
         status: "success",
         data: {
