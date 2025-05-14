@@ -5,6 +5,7 @@ import {
 } from "./config";
 import { extractScreenshots } from "./pipeline/screenshot";
 import {
+  createEmptyTranscriptSegments,
   getSubtitles,
   getTranscriptsByInterval,
 } from "./services/transcriptionService";
@@ -14,12 +15,15 @@ import {
   ExtractScreenshotResponse,
   FinalResponse,
   PromptSegment,
+  PromptType,
+  TranscriptInternal,
+  VideoPathWithDuration,
   VideoProcessMessage,
   VideoToAudioResponse,
 } from "./types";
 import fs from "fs";
 import { getPrompSegments, preparePromptMessages } from "./pipeline/prompt";
-import { downloadVideos } from "./pipeline/download";
+import { downloadVideos, getVideoDurations } from "./pipeline/download";
 import { errorResponse, unwrapResponse } from "./utils/utils";
 import { videosToAudios } from "./pipeline/audio";
 import { audiosToTranscripts } from "./pipeline/transcript";
@@ -39,76 +43,95 @@ export async function runPipeline(message: {
 }): Promise<FinalResponse> {
   const messageBody: VideoProcessMessage = JSON.parse(message.Body);
 
+  let promptType: PromptType = messageBody.promptType;
   // Step 1: Download videos
   logger.info("Download Step");
-  const dvRes: DownloadVideoResponse = await downloadVideos(messageBody.videos);
-  const dvData = unwrapResponse(dvRes);
-  if (!dvData) return errorResponse(dvRes.message);
+  // const dvRes: DownloadVideoResponse = await downloadVideos(messageBody.videos);
+  // const dvData = unwrapResponse(dvRes);
+  // if (!dvData) return errorResponse(dvRes.message);
 
   // Step 2: Videos To Audio
-  // const dvData = {
-  //   videoPaths: Array.from(
-  //     { length: 5 },
-  //     (_, index) => `tmp/video-${index + 1}.mp4`
-  //   ),
-  // };
+  const dvData = {
+    videoPaths: Array.from(
+      { length: 8 },
+      (_, index) => `tmp/video-${index + 1}.mp4`
+    ),
+  };
+  const videoPathsWithDuration: VideoPathWithDuration[] =
+    await getVideoDurations(dvData.videoPaths);
+
   logger.info("Video to audio step");
-  const vaRes: VideoToAudioResponse = await videosToAudios(dvData.videoPaths);
-  const vaData = unwrapResponse(vaRes);
-  if (!vaData) return errorResponse(vaRes.message);
+  let transcriptSegments: TranscriptInternal[][] = [];
+  let audioPaths: string[] = [];
+  let transcripts: Transcript[] = [];
+  if (promptType !== "screenshot") {
+    const vaRes: VideoToAudioResponse = await videosToAudios(dvData.videoPaths);
+    const vaData = unwrapResponse(vaRes);
+    if (!vaData) return errorResponse(vaRes.message);
 
-  // // Step 3: Audios To Transcripts
-  logger.info("Audio to transcript step");
-  const atRes: AudioToTranscriptResponse = await audiosToTranscripts(
-    vaData.audioPaths
-  );
-  const atData = unwrapResponse(atRes);
-  if (!atData) return errorResponse(atRes.message);
-  // const transcriptsStr = await fsP.readFile("transcripts.json", "utf8");
-  // const atData = {
-  //   transcripts: JSON.parse(transcriptsStr) as Transcript[],
-  // };
+    // // Step 3: Audios To Transcripts
+    logger.info("Audio to transcript step");
+    const atRes: AudioToTranscriptResponse = await audiosToTranscripts(
+      vaData.audioPaths
+    );
+    const atData = unwrapResponse(atRes);
+    if (!atData) return errorResponse(atRes.message);
+    audioPaths = vaData.audioPaths;
+    // const transcriptsStr = await fsP.readFile("transcripts.json", "utf8");
+    // const atData = {
+    //   transcripts: JSON.parse(transcriptsStr) as Transcript[],
+    // };
 
-  // Step 4: Transcripts To Segments
-  // transcriptSegments array contains an array of transcripts for each video, seperated by interval
-  logger.info("Segmentation step");
-  const transcriptSegments = atData.transcripts.map((transcript) =>
-    getTranscriptsByInterval(transcript, TRANSCRIPTION_SEGMENT_INTERVAL * 1000)
-  );
+    // Step 4: Transcripts To Segments
+    // transcriptSegments array contains an array of transcripts for each video, seperated by interval
+    logger.info("Segmentation step");
+    transcriptSegments = atData.transcripts.map((transcript) =>
+      getTranscriptsByInterval(
+        transcript,
+        TRANSCRIPTION_SEGMENT_INTERVAL * 1000
+      )
+    );
+    transcripts = atData.transcripts;
 
-  await fsP.writeFile(
-    "transcriptSegments.json",
-    JSON.stringify(transcriptSegments),
-    "utf8"
-  );
+    await fsP.writeFile(
+      "transcriptSegments.json",
+      JSON.stringify(transcriptSegments),
+      "utf8"
+    );
+  } else {
+    transcriptSegments = videoPathsWithDuration.map(
+      (videoPathWithDuration, index) =>
+        createEmptyTranscriptSegments(
+          TRANSCRIPTION_SEGMENT_INTERVAL * 1000,
+          videoPathWithDuration.duration
+        )
+    );
+  }
 
   // Step 5: Screenshots Extraction From Videos
-  logger.info("Screenshots step");
-  const esRes: ExtractScreenshotResponse = await extractScreenshots(
-    dvData.videoPaths.map((videoPath, index) => {
-      const transcript = atData.transcripts[index];
-      return {
-        path: videoPath,
-        duration: transcript.audio_duration! - 1,
-      };
-    }),
-    TRANSCRIPTION_SEGMENT_INTERVAL,
-    SCREENSHOTS_PER_SEGMENT
-  );
-  const esData = unwrapResponse(esRes);
-  if (!esData) return errorResponse(esRes.message);
-  await fsP.writeFile(
-    "screenshotPaths.json",
-    JSON.stringify(esData.screenshotPaths),
-    "utf8"
-  );
+  let screenshotPaths: string[][] = [];
+  if (promptType !== "transcript") {
+    logger.info("Screenshots step");
+    const esRes: ExtractScreenshotResponse = await extractScreenshots(
+      videoPathsWithDuration,
+      TRANSCRIPTION_SEGMENT_INTERVAL,
+      SCREENSHOTS_PER_SEGMENT
+    );
+    const esData = unwrapResponse(esRes);
+    if (!esData) return errorResponse(esRes.message);
+    screenshotPaths = esData.screenshotPaths;
+    await fsP.writeFile(
+      "screenshotPaths.json",
+      JSON.stringify(esData.screenshotPaths),
+      "utf8"
+    );
+  }
 
   // Step 6: Prepare prompt segments
   const allPromptSegments: PromptSegment[][] = [];
-  for (let i = 0; i < 5; i++) {
-    const videoTranscriptSegments = transcriptSegments[i];
-    const videoScreenshots = esData.screenshotPaths[i];
-    const totalSegments = videoTranscriptSegments.length;
+  for (let i = 0; i < dvData.videoPaths.length; i++) {
+    const videoTranscriptSegments = transcriptSegments[i] ?? [];
+    const videoScreenshots = screenshotPaths[i] ?? [];
     // if(videoScreenshots.length !== totalSegments * SCREENSHOTS_PER_SEGMENT) {
     //   logger.error("Unkown error");
     //   continue
@@ -117,7 +140,7 @@ export async function runPipeline(message: {
     const prompSegments = getPrompSegments(
       videoTranscriptSegments,
       screenshotUrls,
-      SCREENSHOTS_PER_SEGMENT
+      promptType === "transcript" ? 0 : SCREENSHOTS_PER_SEGMENT
     );
     allPromptSegments.push(prompSegments);
   }
@@ -130,7 +153,13 @@ export async function runPipeline(message: {
 
   // Step 7: Prepare prompt messages
   logger.info("Prepare prompt step");
-  const promptMessages = preparePromptMessages(allPromptSegments, 20);
+  const promptMessages = preparePromptMessages(
+    allPromptSegments,
+    TRANSCRIPTION_SEGMENT_INTERVAL,
+    SCREENSHOTS_PER_SEGMENT,
+    promptType,
+    20
+  );
   await fsP.writeFile(
     "promptMessages.json",
     JSON.stringify(promptMessages),
@@ -149,36 +178,38 @@ export async function runPipeline(message: {
   logger.info("Final video step");
   const fcRes = await generateFinalClip(
     dvData.videoPaths,
-    filterClips(atData.transcripts, response),
+    filterClips(videoPathsWithDuration, response),
     "portrait"
   );
-  const fcData = unwrapResponse(fcRes)
+  const fcData = unwrapResponse(fcRes);
   if (!fcData) return errorResponse(fcRes.message);
   // Step 11: Cleanup Original Videos and Audios
   logger.info("Temp cleanup step");
   await cleanUp(
-    [...dvData.videoPaths, ...vaData.audioPaths],
-    // [],[]
+    [...dvData.videoPaths, ...audioPaths, ...screenshotPaths.flat()],
     allPromptSegments.flat().flatMap((segment) => segment.images)
   );
-  // Step 12: Get Final Video Subtitiles
-  logger.info("Final video transcript step");
-  const fAtRes: AudioToTranscriptResponse = await audiosToTranscripts([
-    "final_clip.mp3",
-  ]);
-  const fAtData = unwrapResponse(fAtRes);
-  if (!fAtData) return errorResponse(fAtRes.message);
-  const transcript = atData.transcripts[0];
-  const subtitles = await getSubtitles(transcript.id);
-  // const subtitles = await fsP.readFile("subtitles.txt", "utf8");
-  await fsP.writeFile("subtitles.txt", "utf8");
+  let finalPath = fcData.videoPath;
+  if (promptType !== "screenshot") {
+    // Step 12: Get Final Video Subtitiles
+    logger.info("Final video transcript step");
+    const fAtRes: AudioToTranscriptResponse = await audiosToTranscripts([
+      fcData.audioPath,
+    ]);
+    const fAtData = unwrapResponse(fAtRes);
+    if (!fAtData) return errorResponse(fAtRes.message);
+    const transcript = transcripts[0];
+    const subtitles = await getSubtitles(transcript.id);
+    // const subtitles = await fsP.readFile("subtitles.txt", "utf8");
+    await fsP.writeFile("subtitles.txt", "utf8");
 
-  // Step 13: Overlay Captions
-  logger.info("Final video captions step");
-  const outputPath = `${getRandomFileName()}_final.mp4`;
-  await burnCaptions(fcData.videoPath, subtitles, outputPath);
-  // Step 14: Upload result to storage service
-  const resultUrl = await uploadFileByPath(outputPath);
+    // Step 13: Overlay Captions
+    logger.info("Final video captions step");
+    finalPath = `${getRandomFileName()}_final.mp4`;
+    await burnCaptions(fcData.videoPath, subtitles, finalPath);
+  }
+  // // Step 14: Upload result to storage service
+  const resultUrl = await uploadFileByPath(finalPath);
   await cleanUp([fcData.videoPath], []);
   return { status: "success", data: { resultUrl } };
   // if (message.ReceiptHandle) await deleteMessage(message.ReceiptHandle);

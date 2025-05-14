@@ -14,6 +14,7 @@ export type VideoProcessMessage = {
   videos: InputVideo[];
   userPrompt?: string;
   resultType?: VideoResultType;
+  promptType: PromptType;
 };
 
 export type PipelineResponse<T> =
@@ -67,6 +68,10 @@ export type PromptSegment = {
   text: string;
   images: string[];
 };
+
+export type PromptType = "screenshot" | "transcript" | "both";
+
+export type VideoPathWithDuration = { path: string; duration: number };
 
 export interface S3Config {
   region: string;

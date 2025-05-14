@@ -3,10 +3,10 @@ import * as fs from "fs";
 import * as path from "path";
 import * as util from "util";
 import logger from "../utils/logger";
-import { FinalClipResponse, VideoResultType } from "../types";
-import { Transcript } from "assemblyai";
+import { FinalClipResponse, VideoPathWithDuration, VideoResultType } from "../types";
 import { Clips } from "../schemas/clips";
 import os from "os";
+import { getRandomFileName } from "../services/s3Service";
 
 // Promisified versions of fs functions
 const mkdirPromise = util.promisify(fs.mkdir);
@@ -95,13 +95,16 @@ const getVideoInfo = async (
   });
 };
 
-export function filterClips(transcripts: Transcript[], clips: Clips) {
+export function filterClips(
+  videoPathsWithDuration: VideoPathWithDuration[],
+  clips: Clips
+) {
   const filteredClips = clips
     .filter(
-      (clip) => transcripts[clip.index]?.audio_duration && clip.start >= 0
+      (clip) => videoPathsWithDuration[clip.index]?.duration && clip.start >= 0
     )
     .map((clip) => {
-      const audio_duration = transcripts[clip.index].audio_duration;
+      const audio_duration = videoPathsWithDuration[clip.index].duration;
       let end = clip.end;
       if (end > audio_duration! * 1000) {
         end = audio_duration! * 1000;
@@ -740,8 +743,14 @@ export async function generateFinalClip(
     }
 
     // Define output paths
-    const outputVideoPath = path.join(process.cwd(), "final_clip.mp4");
-    const outputAudioPath = path.join(process.cwd(), "final_clip.mp3");
+    const outputVideoPath = path.join(
+      process.cwd(),
+      `${getRandomFileName()}_final_clip.mp4`
+    );
+    const outputAudioPath = path.join(
+      process.cwd(),
+      `${getRandomFileName()}_final_clip.mp3`
+    );
 
     // Concatenate the clips
     logger.info(

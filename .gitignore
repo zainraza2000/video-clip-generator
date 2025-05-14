@@ -23,7 +23,6 @@ Thumbs.db
 .env.*.local
 
 # IDEs and editors
-.vscode/
 .idea/
 
 # Test coverage
@@ -33,3 +32,6 @@ coverage/
 *.tgz
 
 /tmp
+temp_auto_push.bat
+temp_interactive_push.bat
+.gitignore

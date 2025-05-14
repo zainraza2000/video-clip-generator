@@ -63,6 +63,14 @@ export function getTranscriptsByInterval(
   return transcriptsInternal;
 }
 
+export function createEmptyTranscriptSegments(interval: number, duration: number) {
+  const transcriptsInternal: TranscriptInternal[] = [];
+  for (let i = 0; i < duration; i += interval) {
+    transcriptsInternal.push({ start: i, end: i + interval, utterances: [] });
+  }
+  return transcriptsInternal;
+}
+
 export async function getSubtitles(transcriptId: string) {
   try {
     const client = new AssemblyAI({
