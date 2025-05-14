@@ -13,7 +13,7 @@ export async function extractRandomScreenshot(
   videoPath: string,
   startTimeMs: number,
   endTimeMs: number
-): Promise<string> {
+): Promise<string | null> {
   const filename = `screenshot_${Date.now()}.png`;
   const screenshotPath = path.join(TMP_DIR, filename);
   const randomTimeSec = randomInt(startTimeMs, endTimeMs) / 1000;
@@ -34,7 +34,7 @@ export async function extractRandomScreenshot(
             console.log("[screenshot] Screenshot extraction completed");
             resolve(screenshotPath);
           } else {
-            reject(new Error("Screenshot not found at expected location."));
+            resolve(null);
           }
         } catch (err) {
           console.error("[screenshot] Error reading file:", err);
@@ -73,7 +73,7 @@ export async function extractScreenshots(
           if (start < end) {
             const screenshot = await extractRandomScreenshot(path, start, end);
             // Add directly to the correct array
-            allScreenshotPaths[videoIndex].push(screenshot);
+            if (screenshot) allScreenshotPaths[videoIndex].push(screenshot);
           }
         }
       }

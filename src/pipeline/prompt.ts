@@ -1,4 +1,4 @@
-import { PromptSegment, TranscriptInternal, UtteranceInternal } from "../types";
+import { PromptSegment, PromptType, TranscriptInternal, UtteranceInternal } from "../types";
 import { CoreMessage, ImagePart } from "ai";
 import {
   buildSystemPrompt,
@@ -7,7 +7,7 @@ import {
   VIDEO_TAG_END,
   VIDEO_TAG_START,
 } from "../utils/prompt";
-import { TRANSCRIPTION_SEGMENT_INTERVAL } from "../config";
+import { SCREENSHOTS_PER_SEGMENT, TRANSCRIPTION_SEGMENT_INTERVAL } from "../config";
 
 export function utterancesToSentence(
   utterances: UtteranceInternal[]
@@ -33,7 +33,8 @@ export function getPrompSegments(
       sliceStart + screenshotsPerSegment > length
         ? length
         : sliceStart + screenshotsPerSegment;
-    const screenshots = screenshotPaths.slice(sliceStart, sliceEnd);
+    const screenshots =
+      sliceEnd === 0 ? [] : screenshotPaths.slice(sliceStart, sliceEnd);
     segments.push({
       text: utterancesToSentence(transcriptSegment.utterances),
       images: screenshots,
@@ -44,6 +45,9 @@ export function getPrompSegments(
 
 export function preparePromptMessages(
   prompSegmentsForVideos: PromptSegment[][],
+  segmentInterval: number,
+  screenshotsPerSegment: number,
+  type: PromptType,
   maxVideoLengthSeconds: number = 60,
   userPrompt?: string
 ): CoreMessage[] {
@@ -51,10 +55,12 @@ export function preparePromptMessages(
   messages.push({
     role: "system",
     content: `${buildSystemPrompt(
-      TRANSCRIPTION_SEGMENT_INTERVAL,
+      segmentInterval,
+      screenshotsPerSegment,
       prompSegmentsForVideos.length,
       maxVideoLengthSeconds,
-      userPrompt
+      userPrompt,
+      type
     )}`,
   });
   prompSegmentsForVideos.forEach((promptSegments, index) => {
@@ -66,10 +72,14 @@ export function preparePromptMessages(
       messages.push({
         role: "user",
         content: [
-          {
-            type: "text",
-            text: `${segment.text}\n`,
-          },
+          ...(segment.text
+            ? [
+                {
+                  type: "text" as const,
+                  text: `${segment.text}\n`,
+                },
+              ]
+            : []),
           ...segment.images.map(
             (image) => ({ type: "image", image } as ImagePart)
           ),
